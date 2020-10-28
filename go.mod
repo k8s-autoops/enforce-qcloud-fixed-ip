@@ -1,4 +1,4 @@
-module github.com/k8s-autoops/admission-httpscat
+module github.com/k8s-autoops/enforce-qcloud-fixed-ip
 
 go 1.14
 

@@ -3,23 +3,34 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"fmt"
-	v1 "k8s.io/api/admission/v1"
+	admissionv1 "k8s.io/api/admission/v1"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
 	"strconv"
-	"strings"
-	"sync"
 	"syscall"
-	"time"
 )
 
-var (
-	responseBody = []byte("OK")
-	responseType = "text/plain; charset=utf-8"
-)
+type M map[string]interface{}
+
+type StatefulSet struct {
+	Spec struct {
+		Template struct {
+			Metadata struct {
+				Annotations *M `json:"annotations"`
+			} `json:"metadata"`
+			Spec struct {
+				Containers []struct {
+					Resources *struct {
+						Limits   *M `json:"limits"`
+						Requests *M `json:"requests"`
+					} `json:"resources"`
+				} `json:"containers"`
+			} `json:"spec"`
+		} `json:"template"`
+	} `json:"spec"`
+}
 
 const (
 	certFile = "/autoops-data/tls/tls.crt"
@@ -42,51 +53,105 @@ func main() {
 	log.SetFlags(0)
 	log.SetOutput(os.Stdout)
 
-	requestID := uint64(0)
-	requestLocker := &sync.Mutex{}
-
 	s := &http.Server{
 		Addr: ":443",
 		Handler: http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
-			requestLocker.Lock()
-			defer requestLocker.Unlock()
-			requestID++
-			// line start / line end
-			lineStart := fmt.Sprintf("================== %s ==== #%d ==================", time.Now().Format(time.RFC3339), requestID)
-			log.Println(lineStart)
-			lineEnd := &strings.Builder{}
-			for range lineStart {
-				lineEnd.WriteRune('=')
-			}
-			defer log.Println(lineEnd.String())
-			// proto / method / url
-			log.Printf("\n%s %s %s", req.Proto, req.Method, req.URL.String())
-			// headers
-			log.Printf("\nHost: %s", req.Host)
-			for k, vs := range req.Header {
-				for _, v := range vs {
-					log.Printf("%s: %s", k, v)
-				}
-			}
-
-			// response
-			var review v1.AdmissionReview
+			// decode request
+			var review admissionv1.AdmissionReview
 			if err := json.NewDecoder(req.Body).Decode(&review); err != nil {
 				log.Println("Failed to decode a AdmissionReview:", err.Error())
 				http.Error(rw, err.Error(), http.StatusBadRequest)
 				return
 			}
 
-			reviewPretty, _ := json.MarshalIndent(&review, "", "  ")
-			log.Printf("%s", reviewPretty)
+			// log
+			reviewPrettyJSON, _ := json.MarshalIndent(&review, "", "  ")
+			log.Println(string(reviewPrettyJSON))
 
-			// response
-			review.Response = &v1.AdmissionResponse{
-				UID:     review.Request.UID,
-				Allowed: true,
+			// patches
+			var buf []byte
+			var sts StatefulSet
+
+			if buf, err = review.Request.Object.MarshalJSON(); err != nil {
+				log.Println("Failed to marshal object to json:", err.Error())
+				http.Error(rw, err.Error(), http.StatusBadRequest)
+				return
+			}
+			if err = json.Unmarshal(buf, &sts); err != nil {
+				log.Println("Failed to unmarshal object to statefulset:", err.Error())
+				http.Error(rw, err.Error(), http.StatusBadRequest)
+				return
+			}
+
+			// build patches
+			var patches []M
+			if sts.Spec.Template.Metadata.Annotations == nil {
+				patches = append(patches, M{
+					"op":    "replace",
+					"path":  "/spec/template/metadata/annotations",
+					"value": M{},
+				})
+			}
+			patches = append(patches, M{
+				"op":    "replace",
+				"path":  "/spec/template/metadata/annotations/tke.cloud.tencent.com~1networks",
+				"value": "tke-route-eni",
+			})
+			patches = append(patches, M{
+				"op":    "replace",
+				"path":  "/spec/template/metadata/annotations/tke.cloud.tencent.com~1vpc-ip-claim-delete-policy",
+				"value": "Never",
+			})
+			c := sts.Spec.Template.Spec.Containers[0]
+			if c.Resources == nil {
+				patches = append(patches, M{
+					"op":    "replace",
+					"path":  "/spec/template/spec/containers/0/resources",
+					"value": M{},
+				})
+			}
+			if c.Resources == nil || c.Resources.Limits == nil {
+				patches = append(patches, M{
+					"op":    "replace",
+					"path":  "/spec/template/spec/containers/0/resources/limits",
+					"value": M{},
+				})
+			}
+			if c.Resources == nil || c.Resources.Requests == nil {
+				patches = append(patches, M{
+					"op":    "replace",
+					"path":  "/spec/template/spec/containers/0/resources/requests",
+					"value": M{},
+				})
+			}
+			patches = append(patches, M{
+				"op":    "replace",
+				"path":  "/spec/template/spec/containers/0/resources/limits/tke.cloud.tencent.com~1eni-ip",
+				"value": "1",
+			})
+			patches = append(patches, M{
+				"op":    "replace",
+				"path":  "/spec/template/spec/containers/0/resources/requests/tke.cloud.tencent.com~1eni-ip",
+				"value": "1",
+			})
+
+			// build response
+			var patchJSON []byte
+			if patchJSON, err = json.Marshal(patches); err != nil {
+				log.Println("Failed to marshal patches:", err.Error())
+				http.Error(rw, err.Error(), http.StatusBadRequest)
+				return
+			}
+			patchType := admissionv1.PatchTypeJSONPatch
+			review.Response = &admissionv1.AdmissionResponse{
+				UID:       review.Request.UID,
+				Allowed:   true,
+				Patch:     patchJSON,
+				PatchType: &patchType,
 			}
 			review.Request = nil
 
+			// send response
 			reviewJSON, _ := json.Marshal(review)
 			rw.Header().Set("Content-Type", "application/json")
 			rw.Header().Set("Content-Length", strconv.Itoa(len(reviewJSON)))

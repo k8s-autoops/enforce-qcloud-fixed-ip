@@ -2,6 +2,10 @@
 
 自动强制为 StatefulSet 类型开启腾讯云 TKE 固定 Pod IP 功能
 
+## 提示
+
+本功能依赖于腾讯云 TKE 的全局 VPC-CNI 模式（非 GlobalRouter + VPC-CNI 模式）
+
 ## 使用方式
 
 * 初始化 `admission-bootstrapper`

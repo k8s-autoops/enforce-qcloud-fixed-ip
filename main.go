@@ -73,45 +73,8 @@ func main() {
 				}
 				*patches = append(*patches, map[string]interface{}{
 					"op":    "replace",
-					"path":  "/spec/template/metadata/annotations/tke.cloud.tencent.com~1networks",
-					"value": "tke-route-eni",
-				})
-				*patches = append(*patches, map[string]interface{}{
-					"op":    "replace",
 					"path":  "/spec/template/metadata/annotations/tke.cloud.tencent.com~1vpc-ip-claim-delete-policy",
 					"value": "Never",
-				})
-				c := sts.Spec.Template.Spec.Containers[0]
-				if len(c.Resources.Requests) == 0 && len(c.Resources.Limits) == 0 {
-					*patches = append(*patches, map[string]interface{}{
-						"op":    "replace",
-						"path":  "/spec/template/spec/containers/0/resources",
-						"value": map[string]interface{}{},
-					})
-				}
-				if len(c.Resources.Limits) == 0 {
-					*patches = append(*patches, map[string]interface{}{
-						"op":    "replace",
-						"path":  "/spec/template/spec/containers/0/resources/limits",
-						"value": map[string]interface{}{},
-					})
-				}
-				if len(c.Resources.Requests) == 0 {
-					*patches = append(*patches, map[string]interface{}{
-						"op":    "replace",
-						"path":  "/spec/template/spec/containers/0/resources/requests",
-						"value": map[string]interface{}{},
-					})
-				}
-				*patches = append(*patches, map[string]interface{}{
-					"op":    "replace",
-					"path":  "/spec/template/spec/containers/0/resources/limits/tke.cloud.tencent.com~1eni-ip",
-					"value": "1",
-				})
-				*patches = append(*patches, map[string]interface{}{
-					"op":    "replace",
-					"path":  "/spec/template/spec/containers/0/resources/requests/tke.cloud.tencent.com~1eni-ip",
-					"value": "1",
 				})
 				return
 			}),
